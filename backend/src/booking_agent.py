@@ -5,7 +5,7 @@ from typing import Awaitable, Callable
 
 from livekit.agents import Agent, RunContext, function_tool
 
-from .booking import BookingService
+from .booking import BookingService, normalize_slot_date
 from .monitor import MonitorPublisher
 from .prompts import system_instructions
 
@@ -64,19 +64,20 @@ class BookingAgent(Agent):
         """
         self._notify("Checking availability", "running", day)
         slots = await self._booking.available(day)
+        normalized_day = slots[0].slot_date if slots else normalize_slot_date(day) or day
         logger.info("check_availability day=%s found=%d", day, len(slots))
         self._notify(
-            "Checking availability", "done", f"{len(slots)} open on {day}"
+            "Checking availability", "done", f"{len(slots)} open on {normalized_day}"
         )
         if not slots:
             return {
-                "day": day,
+                "day": normalized_day,
                 "available": False,
                 "times": [],
                 "note": "No open times on that day. Suggest another weekday.",
             }
         return {
-            "day": day,
+            "day": normalized_day,
             "available": True,
             "times": [_speakable_time(s.slot_time) for s in slots],
             "raw_times": [s.slot_time for s in slots],
@@ -124,7 +125,9 @@ class BookingAgent(Agent):
             "booked": result.ok,
             "message": result.message,
             "appointment_id": result.appointment_id,
-            "spoken_time": _speakable_time(time) if result.ok else None,
+            "spoken_time": _speakable_time(result.slot.slot_time)
+            if result.ok and result.slot is not None
+            else None,
         }
 
     @function_tool
