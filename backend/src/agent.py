@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 
 from livekit import agents
@@ -12,10 +13,12 @@ from .config import get_settings
 from .db import init_db
 from .lifecycle import CallLifecycle
 from .monitor import MonitorPublisher
+from .transfer import WarmTransfer
 
 logger = logging.getLogger("agent")
 
 CALLER_PREFIX = "caller"
+CONTROL_TOPIC = "call-control"
 
 
 def _build_session() -> AgentSession:
@@ -29,6 +32,9 @@ def _build_session() -> AgentSession:
         llm=groq.LLM(
             model=settings.llm_model,
             api_key=settings.groq_api_key,
+            temperature=0.4,
+            max_completion_tokens=350,
+            max_retries=3,
         ),
         tts=deepgram.TTS(
             model=settings.tts_model,
@@ -52,7 +58,11 @@ async def booking_session(ctx: JobContext) -> None:
     session = _build_session()
     monitor = MonitorPublisher(ctx.room)
     summary_llm = groq.LLM(
-        model=settings.llm_model, api_key=settings.groq_api_key
+        model=settings.llm_model,
+        api_key=settings.groq_api_key,
+        temperature=0.3,
+        max_completion_tokens=300,
+        max_retries=3,
     )
     lifecycle = CallLifecycle(ctx, session, monitor, summary_llm)
 
@@ -67,8 +77,36 @@ async def booking_session(ctx: JobContext) -> None:
     @session.on("conversation_item_added")
     def _on_item(ev) -> None:
         item = ev.item
+        if getattr(item, "type", None) != "message":
+            return
         if item.role == "assistant" and item.text_content:
             monitor.agent_transcript(item.text_content)
+
+    @session.on("metrics_collected")
+    def _on_metrics(ev) -> None:
+        m = ev.metrics
+        kind = type(m).__name__
+        try:
+            if kind == "LLMMetrics":
+                tps = getattr(m, "tokens_per_second", 0) or 0
+                monitor.metric(
+                    "LLM", m.label, (m.ttft or 0) * 1000,
+                    f"{m.total_tokens} tok · {tps:.0f} tok/s",
+                )
+            elif kind == "TTSMetrics":
+                monitor.metric(
+                    "TTS", m.label, (m.ttfb or 0) * 1000,
+                    f"{m.audio_duration:.1f}s audio",
+                )
+            elif kind == "STTMetrics":
+                monitor.metric("STT", m.label, (m.duration or 0) * 1000, None)
+            elif kind == "EOUMetrics":
+                monitor.metric(
+                    "Turn", "endpointing",
+                    (m.end_of_utterance_delay or 0) * 1000, "end of turn",
+                )
+        except Exception:
+            logger.debug("metric publish failed", exc_info=True)
 
     @session.on("error")
     def _on_error(ev) -> None:
@@ -88,28 +126,61 @@ async def booking_session(ctx: JobContext) -> None:
     def _on_join(participant) -> None:
         _remember_caller(participant.identity)
 
+    async def end_everything() -> None:
+        try:
+            await ctx.delete_room()
+        except Exception:
+            logger.warning("failed to delete room", exc_info=True)
+
     @ctx.room.on("participant_disconnected")
     def _on_leave(participant) -> None:
-        if participant.identity.startswith(CALLER_PREFIX):
-            logger.info("caller %s left; ending call", participant.identity)
+        identity = participant.identity
+        if lifecycle.transferred:
+            logger.info("%s left after transfer; ending call", identity)
+            asyncio.create_task(end_everything())
+        elif identity.startswith(CALLER_PREFIX):
+            logger.info("caller %s left; ending call", identity)
             asyncio.create_task(lifecycle.end())
+
+    @ctx.room.on("data_received")
+    def _on_data(packet) -> None:
+        if packet.topic != CONTROL_TOPIC:
+            return
+        try:
+            action = json.loads(packet.data.decode("utf-8")).get("action")
+        except Exception:
+            return
+        if action == "end":
+            logger.info("caller requested end via control channel")
+            if lifecycle.transferred:
+                asyncio.create_task(end_everything())
+            else:
+                asyncio.create_task(lifecycle.end())
 
     ctx.add_shutdown_callback(lifecycle.finalize)
 
-    async def hangup() -> None:
-        await lifecycle.hangup(caller["identity"])
+    transfer = WarmTransfer(ctx, session, monitor, summary_llm, settings)
 
-    agent = BookingAgent(monitor=monitor, on_hangup=hangup)
+    async def hangup() -> None:
+        await lifecycle.end()
+
+    async def do_transfer(reason: str) -> bool:
+        ok = await transfer.start(reason)
+        if ok:
+            lifecycle.mark_transferred()
+        return ok
+
+    agent = BookingAgent(
+        monitor=monitor, on_hangup=hangup, on_transfer=do_transfer
+    )
     await session.start(agent=agent, room=ctx.room)
     for participant in ctx.room.remote_participants.values():
         _remember_caller(participant.identity)
-    monitor.call_status("live")
+    monitor.call_status("connected")
 
-    await session.generate_reply(
-        instructions=(
-            f"Greet the caller, say you are the booking assistant for "
-            f"{settings.business_name}, and ask how you can help."
-        )
+    await session.say(
+        f"Hi, thanks for calling {settings.business_name}. "
+        "I can help you book an appointment. How can I help today?"
     )
 
 

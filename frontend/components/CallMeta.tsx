@@ -5,7 +5,9 @@ import { CallStatus } from "@/lib/types";
 
 const LABEL: Record<CallStatus, string> = {
   idle: "Waiting for call",
-  live: "Live",
+  connecting: "Connecting",
+  connected: "Connected",
+  transferring: "Transferring",
   ended: "Call ended",
 };
 
@@ -19,11 +21,13 @@ export function CallMeta({ status }: { status: CallStatus }) {
   const [elapsed, setElapsed] = useState(0);
   const startRef = useRef<number | null>(null);
 
+  const running = status === "connected" || status === "transferring";
+
   useEffect(() => {
-    if (status === "live" && startRef.current === null) {
+    if (running && startRef.current === null) {
       startRef.current = Date.now();
     }
-    if (status !== "live") return;
+    if (!running) return;
 
     const id = setInterval(() => {
       if (startRef.current !== null) {
@@ -31,7 +35,7 @@ export function CallMeta({ status }: { status: CallStatus }) {
       }
     }, 1000);
     return () => clearInterval(id);
-  }, [status]);
+  }, [running]);
 
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>

@@ -1,28 +1,13 @@
-import Link from "next/link";
-
-export function TopBar({ active }: { active?: "call" | "monitor" }) {
+export function TopBar() {
   return (
     <div className="topbar">
-      <Link href="/" className="brand" style={{ textDecoration: "none", color: "inherit" }}>
+      <div className="brand">
         <span className="brand-dot" />
         Bright Smile
-      </Link>
-      <nav style={{ display: "flex", gap: 4 }}>
-        <Link
-          href="/call"
-          className="link"
-          style={active === "call" ? { background: "var(--surface-muted)", color: "var(--text)" } : undefined}
-        >
-          Call
-        </Link>
-        <Link
-          href="/monitor"
-          className="link"
-          style={active === "monitor" ? { background: "var(--surface-muted)", color: "var(--text)" } : undefined}
-        >
-          Live monitor
-        </Link>
-      </nav>
+      </div>
+      <span className="link" style={{ pointerEvents: "none" }}>
+        Voice Booking
+      </span>
     </div>
   );
 }

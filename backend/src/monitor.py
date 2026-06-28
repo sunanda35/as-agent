@@ -29,6 +29,22 @@ class MonitorPublisher:
             {"kind": "transcript", "role": "agent", "text": text, "final": True}
         )
 
+    def intent(self, text: str) -> None:
+        self._emit({"kind": "intent", "text": text})
+
+    def metric(
+        self, metric: str, label: str, ms: float | None, detail: str | None = None
+    ) -> None:
+        self._emit(
+            {
+                "kind": "metric",
+                "metric": metric,
+                "label": label,
+                "ms": round(ms) if ms is not None else None,
+                "detail": detail,
+            }
+        )
+
     def action(self, label: str, status: str, detail: str | None = None) -> None:
         self._emit(
             {"kind": "action", "label": label, "status": status, "detail": detail}

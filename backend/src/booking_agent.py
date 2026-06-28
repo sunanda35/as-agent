@@ -27,15 +27,31 @@ class BookingAgent(Agent):
         booking: BookingService | None = None,
         monitor: MonitorPublisher | None = None,
         on_hangup: Callable[[], Awaitable[None]] | None = None,
+        on_transfer: Callable[[str], Awaitable[bool]] | None = None,
     ) -> None:
         super().__init__(instructions=system_instructions())
         self._booking = booking or BookingService()
         self._monitor = monitor
         self._on_hangup = on_hangup
+        self._on_transfer = on_transfer
 
     def _notify(self, label: str, status: str, detail: str | None = None) -> None:
         if self._monitor is not None:
             self._monitor.action(label, status, detail)
+
+    @function_tool
+    async def note_intent(self, context: RunContext, intent: str) -> dict:
+        """Record what the caller wants, as soon as you understand it. Call this
+        once, early in the call, before checking availability.
+
+        Args:
+            intent: A short phrase describing the caller's goal, e.g.
+                "Book a dental cleaning" or "Reschedule an appointment".
+        """
+        logger.info("intent detected: %s", intent)
+        if self._monitor is not None:
+            self._monitor.intent(intent)
+        return {"noted": True}
 
     @function_tool
     async def check_availability(
@@ -74,27 +90,34 @@ class BookingAgent(Agent):
         time: str,
         customer_name: str,
         service: str,
+        contact_number: str,
     ) -> dict:
-        """Book an appointment in an open slot.
+        """Book an appointment in an open slot. Only call this after you have
+        collected the caller's name, reason for visit, preferred time, and a
+        contact phone number, and confirmed the slot is available.
 
         Args:
             day: The appointment date as an ISO string in YYYY-MM-DD format.
             time: The 24-hour slot time as HH:MM, taken from check_availability.
             customer_name: The caller's full name.
-            service: The requested service, e.g. checkup or cleaning.
+            service: The reason for the visit, e.g. checkup or cleaning.
+            contact_number: The caller's contact phone number.
         """
         self._notify("Booking appointment", "running", f"{customer_name} · {day} {time}")
-        result = await self._booking.book(day, time, customer_name, service)
+        result = await self._booking.book(
+            day, time, customer_name, service, phone=contact_number
+        )
         self._notify(
             "Booking appointment",
             "done" if result.ok else "failed",
             result.message,
         )
         logger.info(
-            "book_appointment day=%s time=%s name=%s ok=%s",
+            "book_appointment day=%s time=%s name=%s phone=%s ok=%s",
             day,
             time,
             customer_name,
+            contact_number,
             result.ok,
         )
         return {
@@ -103,6 +126,22 @@ class BookingAgent(Agent):
             "appointment_id": result.appointment_id,
             "spoken_time": _speakable_time(time) if result.ok else None,
         }
+
+    @function_tool
+    async def transfer_to_human(self, context: RunContext, reason: str) -> dict:
+        """Warm-transfer the caller to a human teammate. Use this when the caller
+        asks to speak to a person, or for billing questions or complaints that you
+        cannot resolve. Do not promise a transfer you have not started.
+
+        Args:
+            reason: A short reason for the transfer, e.g. "a billing question"
+                or "a complaint about a recent visit".
+        """
+        logger.info("transfer_to_human requested: %s", reason)
+        if self._on_transfer is None:
+            return {"transferred": False, "message": "Transfer is not available."}
+        transferred = await self._on_transfer(reason)
+        return {"transferred": transferred}
 
     @function_tool
     async def end_call(self, context: RunContext, farewell: str) -> dict:

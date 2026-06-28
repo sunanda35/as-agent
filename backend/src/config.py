@@ -39,6 +39,8 @@ class Settings:
     llm_model: str
     business_name: str
     timezone: str
+    sip_trunk_id: str
+    transfer_phone_number: str
 
     @classmethod
     def load(cls) -> "Settings":
@@ -50,10 +52,16 @@ class Settings:
             groq_api_key=_require("GROQ_API_KEY"),
             stt_model=os.getenv("STT_MODEL", "nova-3"),
             tts_model=os.getenv("TTS_MODEL", "aura-2-andromeda-en"),
-            llm_model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"),
+            llm_model=os.getenv("LLM_MODEL", "llama-3.1-8b-instant"),
             business_name=os.getenv("BUSINESS_NAME", "Bright Smile Dental"),
             timezone=os.getenv("BUSINESS_TIMEZONE", "America/New_York"),
+            sip_trunk_id=os.getenv("LIVEKIT_SIP_TRUNK_ID", ""),
+            transfer_phone_number=os.getenv("TRANSFER_PHONE_NUMBER", ""),
         )
+
+    @property
+    def transfer_enabled(self) -> bool:
+        return bool(self.sip_trunk_id and self.transfer_phone_number)
 
 
 _settings: Settings | None = None

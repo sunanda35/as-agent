@@ -8,16 +8,34 @@ export type AgentState =
   | "idle"
   | "away";
 
-export type CallStatus = "idle" | "live" | "ended";
+export type CallStatus =
+  | "idle"
+  | "connecting"
+  | "connected"
+  | "transferring"
+  | "ended";
 
 export type ActionStatus = "running" | "done" | "failed";
 
 export type MonitorEvent =
   | { kind: "state"; state: AgentState; ts: string }
   | { kind: "transcript"; role: "caller" | "agent"; text: string; final: boolean; ts: string }
+  | { kind: "intent"; text: string; ts: string }
   | { kind: "action"; label: string; status: ActionStatus; detail?: string | null; ts: string }
+  | { kind: "metric"; metric: string; label: string; ms: number | null; detail?: string | null; ts: string }
   | { kind: "call"; status: CallStatus; ts: string }
   | { kind: "summary"; text: string; ts: string };
+
+export type LogKind = "metric" | "action" | "intent" | "call";
+
+export interface LogEntry {
+  id: string;
+  ts: string;
+  kind: LogKind;
+  label: string;
+  detail?: string | null;
+  ms?: number | null;
+}
 
 export interface TranscriptMessage {
   id: string;
@@ -38,6 +56,8 @@ export interface MonitorView {
   callStatus: CallStatus;
   messages: TranscriptMessage[];
   interimCaller: string | null;
+  intent: string | null;
   action: ActionView | null;
   summary: string | null;
+  logs: LogEntry[];
 }

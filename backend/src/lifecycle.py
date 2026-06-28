@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from livekit import api
 from livekit.agents import AgentSession, JobContext
 from livekit.agents.llm import LLM
 
@@ -27,9 +26,17 @@ class CallLifecycle:
         self._summary_llm = summary_llm
         self._finalized = False
         self._ended = False
+        self._transferred = False
+
+    def mark_transferred(self) -> None:
+        self._transferred = True
+
+    @property
+    def transferred(self) -> bool:
+        return self._transferred
 
     async def finalize(self) -> None:
-        if self._finalized:
+        if self._finalized or self._transferred:
             return
         self._finalized = True
 
@@ -38,7 +45,7 @@ class CallLifecycle:
 
         self._monitor.summary(text)
         self._monitor.call_status("ended")
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.5)
 
         logger.info("Call summary saved to %s", path)
         print("\n===== POST-CALL SUMMARY =====")
@@ -52,15 +59,3 @@ class CallLifecycle:
         self._ended = True
         await self.finalize()
         self._ctx.shutdown(reason="call ended")
-
-    async def hangup(self, caller_identity: str | None) -> None:
-        if caller_identity:
-            try:
-                await self._ctx.api.room.remove_participant(
-                    api.RoomParticipantIdentity(
-                        room=self._ctx.room.name, identity=caller_identity
-                    )
-                )
-            except Exception:
-                logger.warning("Failed to remove caller on hangup", exc_info=True)
-        await self.end()
